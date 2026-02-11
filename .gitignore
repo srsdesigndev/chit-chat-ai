@@ -1,0 +1,51 @@
+# ----------------------
+# Python
+# ----------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+.env/
+.envrc/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Logs
+*.log
+
+# Unit test / coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Environment variables
+.env
+.env.local
+
+# API keys / secrets
+secrets.json
+config.json
+
+# Chat history (if you add local memory later)
+chat_history.json
+threads/
+sessions/
+
+# Temporary files
+*.tmp
+*.bak
