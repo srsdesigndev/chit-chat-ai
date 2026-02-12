@@ -1,0 +1,5 @@
+feat: add new feature
+fix: bug fix
+chore: maintenance / non-functional changes
+docs: documentation
+refactor: code restructuring

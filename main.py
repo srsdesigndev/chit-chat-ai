@@ -4,17 +4,17 @@ import json
 import threading
 import time
 import random
+from pathlib import Path
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
 # ---------- CONFIG ----------
-THREAD_FILE = "thread.json"
+THREAD_FILE = Path("thread.json")
 MODEL = "claude-sonnet-4-20250514"
-MAX_WORD_LIMIT = 100
+MAX_WORD_LIMIT = 500
 BOX_WIDTH = 70
-BIT_LENGTH = 64  # length of bits loader
+BIT_LENGTH = 64
 BIT_SPEED = 0.01
-# ----------------------------
 
 # ---------- ANSI COLORS ----------
 GREEN = "\033[92m"
@@ -24,124 +24,128 @@ RESET = "\033[0m"
 
 load_dotenv()
 
-# ---------- Bits Loader ----------
+
 class BitsLoader:
+    """Animated binary loader for visual feedback during API calls."""
+    
     def __init__(self, length=BIT_LENGTH, speed=BIT_SPEED):
         self.length = length
         self.speed = speed
-        self.running = False
-        self.thread = threading.Thread(target=self.animate)
+        self._running = False
+        self._thread = None
 
-    def animate(self):
-        while self.running:
-            bits = "".join(random.choice("01") for _ in range(self.length))
+    def _animate(self):
+        """Generate random binary animation."""
+        while self._running:
+            bits = "".join(random.choices("01", k=self.length))
             print(f"\r{GRAY}{bits}{RESET}", end="", flush=True)
             time.sleep(self.speed)
 
-    def start(self):
-        self.running = True
-        self.thread.start()
+    def __enter__(self):
+        """Start loader using context manager."""
+        self._running = True
+        self._thread = threading.Thread(target=self._animate, daemon=True)
+        self._thread.start()
+        return self
 
-    def stop(self):
-        self.running = False
-        self.thread.join()
-        print("\r" + " " * self.length + "\r", end="", flush=True)
+    def __exit__(self, *args):
+        """Stop loader and clear line."""
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=1)
+        print(f"\r{' ' * self.length}\r", end="", flush=True)
 
 
-# ---------- Rounded Box Printer ----------
 def print_boxed(text):
+    """Print text in a rounded box."""
     top = f"╭{'─' * (BOX_WIDTH - 2)}╮"
     bottom = f"╰{'─' * (BOX_WIDTH - 2)}╯"
-    print(GREEN + top + RESET)
-
+    print(f"{GREEN}{top}{RESET}")
+    
+    # Word wrap
     words = text.split()
-    line = ""
+    line = []
     for word in words:
-        if len(line) + len(word) + 1 <= BOX_WIDTH - 4:
-            line += word + " "
+        test_line = " ".join(line + [word])
+        if len(test_line) <= BOX_WIDTH - 4:
+            line.append(word)
         else:
-            print(f"{GREEN}│ {RESET}{line.ljust(BOX_WIDTH - 4)}{GREEN} │{RESET}")
-            line = word + " "
+            print(f"{GREEN}│ {RESET}{' '.join(line).ljust(BOX_WIDTH - 4)}{GREEN} │{RESET}")
+            line = [word]
+    
     if line:
-        print(f"{GREEN}│ {RESET}{line.ljust(BOX_WIDTH - 4)}{GREEN} │{RESET}")
+        print(f"{GREEN}│ {RESET}{' '.join(line).ljust(BOX_WIDTH - 4)}{GREEN} │{RESET}")
+    print(f"{GREEN}{bottom}{RESET}")
 
-    print(GREEN + bottom + RESET)
-
-
-# ---------- ChitChat Core ----------
 class ChitChat:
+    """Conversational AI bot with persistent chat history."""
+    
     def __init__(self):
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY missing in .env")
-
+            raise ValueError("ANTHROPIC_API_KEY not found in environment")
+        
         self.client = Anthropic(api_key=api_key)
-
-    def load_thread(self):
-        if not os.path.exists(THREAD_FILE):
-            return []
-
-        try:
-            with open(THREAD_FILE, "r") as f:
-                content = f.read().strip()
-                if not content:
-                    return []
-                return json.loads(content)
-        except json.JSONDecodeError:
-            return []
-
-    def save_thread(self, messages):
-        with open(THREAD_FILE, "w") as f:
-            json.dump(messages, f, indent=2)
-
-    def ask(self, query):
-        history = self.load_thread()
-        history.append({"role": "user", "content": query})
-
-        system_instruction = (
-            f"You are ChitChat. "
-            f"Answer in less than {MAX_WORD_LIMIT} words. "
-            f"Be clear and concise."
+        self.system_prompt = (
+            f"You are ChitChat. Answer in less than {MAX_WORD_LIMIT} words. "
+            "Be clear and concise."
         )
 
-        loader = BitsLoader()
-        loader.start()
+    def _load_thread(self):
+        """Load conversation history from file."""
+        if not THREAD_FILE.exists():
+            return []
+        
+        try:
+            with THREAD_FILE.open() as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            return []
+
+    def _save_thread(self, messages):
+        """Save conversation history to file."""
+        with THREAD_FILE.open("w") as f:
+            json.dump(messages, f, indent=2)
+
+    def _truncate_reply(self, text):
+        """Enforce word limit on response."""
+        words = text.split()
+        return " ".join(words[:MAX_WORD_LIMIT]) if len(words) > MAX_WORD_LIMIT else text
+
+    def ask(self, query):
+        """Send query and display response."""
+        history = self._load_thread()
+        history.append({"role": "user", "content": query})
 
         try:
-            response = self.client.messages.create(
-                model=MODEL,
-                max_tokens=300,
-                system=system_instruction,
-                messages=history
-            )
+            with BitsLoader():
+                response = self.client.messages.create(
+                    model=MODEL,
+                    max_tokens=300,
+                    system=self.system_prompt,
+                    messages=history
+                )
 
-            loader.stop()
-
-            reply = response.content[0].text.strip()
-
-            # enforce word limit
-            words = reply.split()
-            if len(words) > MAX_WORD_LIMIT:
-                reply = " ".join(words[:MAX_WORD_LIMIT])
-
+            reply = self._truncate_reply(response.content[0].text.strip())
             history.append({"role": "assistant", "content": reply})
-            self.save_thread(history)
-
+            self._save_thread(history)
             print_boxed(reply)
             print()
 
         except Exception as e:
-            loader.stop()
-            print(f"\nAPI Error: {e}")
+            print(f"\n{CYAN}Error: {e}{RESET}")
+            sys.exit(1)
 
 
-# ---------- Entry ----------
-if __name__ == "__main__":
+def main():
+    """Entry point for CLI."""
     if len(sys.argv) < 2:
         print(f"{CYAN}Usage: ./query.sh \"your question\"{RESET}")
         sys.exit(1)
 
-    query = sys.argv[1]
-
     bot = ChitChat()
-    bot.ask(query)
+    bot.ask(sys.argv[1])
+
+
+if __name__ == "__main__":
+    main()
